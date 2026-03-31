@@ -1,0 +1,704 @@
+import cv2
+import numpy as np
+
+class BadmintonDetectorImproved:
+    def __init__(self):
+        self.prev_frame = None
+        self.court_bounds = None
+        # Usar detector de personas de OpenCV (más ligero que YOLO)
+        self.hog = cv2.HOGDescriptor()
+        self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+        
+    def detect(self, frame):
+        """Detecta jugadores, volante y elementos del juego"""
+        detections = {
+            'players': [],
+            'shuttlecock': None,
+            'score': None,
+            'motion_intensity': 0
+        }
+        
+        # Detectar jugadores con HOG (más preciso que diferencia de frames)
+        detections['players'] = self._detect_players_hog(frame)
+        
+        # Detectar volante
+        detections['shuttlecock'] = self._detect_shuttlecock(frame)
+        
+        # Calcular intensidad de movimiento
+        detections['motion_intensity'] = self._calculate_motion(frame)
+        
+        self.prev_frame = frame.copy()
+        return detections
+    
+    def _detect_players_hog(self, frame):
+        """Detecta jugadores usando HOG (Histogram of Oriented Gradients)"""
+        players = []
+        h, w = frame.shape[:2]
+        
+        # Definir región de la cancha
+        court_top = int(h * 0.2)
+        court_bottom = int(h * 0.9)
+        court_left = int(w * 0.1)
+        court_right = int(w * 0.9)
+        
+        # Redimensionar para velocidad
+        scale = 0.5
+        small_frame = cv2.resize(frame, None, fx=scale, fy=scale)
+        
+        # Detectar personas
+        try:
+            boxes, weights = self.hog.detectMultiScale(
+                small_frame,
+                winStride=(8, 8),
+                padding=(4, 4),
+                scale=1.05,
+                hitThreshold=0.5
+            )
+            
+            for (x, y, w_box, h_box), weight in zip(boxes, weights):
+                # Escalar de vuelta a tamaño original
+                x = int(x / scale)
+                y = int(y / scale)
+                w_box = int(w_box / scale)
+                h_box = int(h_box / scale)
+                
+                # Centro y posición de pies
+                center_x = x + w_box // 2
+                center_y = y + h_box  # Pies del jugador
+                
+                # Filtrar solo jugadores en la cancha
+                if (court_left < center_x < court_right and 
+                    court_top < center_y < court_bottom):
+                    players.append({
+                        'x': center_x,
+                        'y': center_y,
+                        'area': w_box * h_box,
+                        'confidence': float(weight)
+                    })
+        except:
+            # Si HOG falla, usar método de respaldo
+            players = self._detect_players_fallback(frame)
+        
+        return players
+    
+    def _detect_players_fallback(self, frame):
+        """Método de respaldo para detectar jugadores"""
+        players = []
+        h, w = frame.shape[:2]
+        
+        court_top = int(h * 0.2)
+        court_bottom = int(h * 0.9)
+        court_left = int(w * 0.1)
+        court_right = int(w * 0.9)
+        
+        if self.prev_frame is not None:
+            diff = cv2.absdiff(frame, self.prev_frame)
+            gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+            _, thresh = cv2.threshold(gray_diff, 30, 255, cv2.THRESH_BINARY)
+            
+            mask = np.zeros_like(thresh)
+            mask[court_top:court_bottom, court_left:court_right] = 255
+            thresh = cv2.bitwise_and(thresh, mask)
+            
+            kernel = np.ones((5, 5), np.uint8)
+            thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+            thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+            
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if 2000 < area < 40000:
+                    x, y, w_box, h_box = cv2.boundingRect(contour)
+                    
+                    if h_box > w_box * 0.8:
+                        center_x = x + w_box // 2
+                        center_y = y + h_box
+                        
+                        if court_left < center_x < court_right and court_top < center_y < court_bottom:
+                            players.append({'x': center_x, 'y': center_y, 'area': area})
+        
+        return players
+    
+    def _detect_shuttlecock(self, frame):
+        """Detecta el volante usando detección de objetos pequeños y rápidos"""
+        if self.prev_frame is None:
+            return None
+        
+        diff = cv2.absdiff(frame, self.prev_frame)
+        gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+        
+        _, thresh = cv2.threshold(gray_diff, 80, 255, cv2.THRESH_BINARY)
+        kernel = np.ones((3, 3), np.uint8)
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+        
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        candidates = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if 20 < area < 300:
+                x, y, w, h = cv2.boundingRect(contour)
+                candidates.append({
+                    'x': x + w // 2,
+                    'y': y + h // 2,
+                    'area': area
+                })
+        
+        if candidates:
+            smallest = min(candidates, key=lambda c: c['area'])
+            return {'x': smallest['x'], 'y': smallest['y']}
+        
+        return None
+    
+    def _calculate_motion(self, frame):
+        """Calcula la intensidad de movimiento en el frame"""
+        if self.prev_frame is None:
+            return 0
+        
+        diff = cv2.absdiff(frame, self.prev_frame)
+        gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+        motion = np.sum(gray_diff) / (frame.shape[0] * frame.shape[1])
+        
+        return motion
+
+web: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 300 --workers 2
+
+python-3.12.0
+
+import os
+import matplotlib
+matplotlib.use('Agg')  # Backend sin GUI para threads
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.colors import LinearSegmentedColormap
+import json
+
+class Visualizer:
+    def __init__(self, output_dir='output'):
+        self.output_dir = output_dir
+        os.makedirs(output_dir, exist_ok=True)
+    
+    def generate_report(self, stats):
+        """Genera reporte completo con gráficos y estadísticas"""
+        
+        # Guardar estadísticas en JSON
+        self._save_json(stats)
+        
+        # Generar gráfico de tipos de golpes
+        self._plot_shot_types(stats['shot_types'])
+        
+        # Generar gráfico de ataque vs defensa
+        self._plot_attack_defense(stats)
+        
+        # Generar mapa de calor
+        if stats['heatmap'] is not None:
+            self._plot_heatmap(stats['heatmap'])
+        
+        # Generar resumen en texto
+        self._generate_text_summary(stats)
+        
+        print(f"\n✓ Gráficos guardados en '{self.output_dir}'")
+    
+    def _save_json(self, stats):
+        """Guarda estadísticas en formato JSON"""
+        output = {
+            'total_shots': stats['total_shots'],
+            'shot_types': stats['shot_types'],
+            'unforced_errors': stats['unforced_errors'],
+            'attack_percentage': stats['attack_percentage'],
+            'defense_percentage': stats['defense_percentage']
+        }
+        
+        with open(os.path.join(self.output_dir, 'stats.json'), 'w') as f:
+            json.dump(output, f, indent=2)
+    
+    def _plot_shot_types(self, shot_types):
+        """Genera gráfico de barras con tipos de golpes"""
+        if not shot_types:
+            return
+        
+        plt.figure(figsize=(10, 6))
+        
+        types = list(shot_types.keys())
+        counts = list(shot_types.values())
+        
+        # Colores: azul rey, verde-amarillo, rojo
+        colors = ['#0047AB', '#00CED1', '#7FFF00', '#FFD700', '#FF6347', '#DC143C']
+        plt.bar(types, counts, color=colors[:len(types)])
+        
+        plt.title('Distribución de Tipos de Golpes', fontsize=16, fontweight='bold')
+        plt.xlabel('Tipo de Golpe', fontsize=12)
+        plt.ylabel('Cantidad', fontsize=12)
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        
+        plt.savefig(os.path.join(self.output_dir, 'shot_types.png'), dpi=300)
+        plt.close()
+    
+    def _plot_attack_defense(self, stats):
+        """Genera gráfico circular de ataque vs defensa"""
+        plt.figure(figsize=(8, 8))
+        
+        sizes = [stats['attack_percentage'], stats['defense_percentage']]
+        labels = ['Ataque', 'Defensa']
+        colors = ['#DC143C', '#0047AB']  # Rojo para ataque, azul rey para defensa
+        explode = (0.1, 0)
+        
+        plt.pie(sizes, explode=explode, labels=labels, colors=colors,
+                autopct='%1.1f%%', shadow=True, startangle=90)
+        
+        plt.title('Distribución Ataque vs Defensa', fontsize=16, fontweight='bold')
+        plt.axis('equal')
+        
+        plt.savefig(os.path.join(self.output_dir, 'attack_defense.png'), dpi=300)
+        plt.close()
+    
+    def _plot_heatmap(self, heatmap):
+        """Genera mapa de calor de posiciones en cancha"""
+        plt.figure(figsize=(14, 10))
+        
+        # Aplicar suavizado gaussiano más suave
+        from scipy.ndimage import gaussian_filter
+        heatmap_smooth = gaussian_filter(heatmap, sigma=30)
+        
+        # Normalizar para mejor visualización
+        if heatmap_smooth.max() > 0:
+            heatmap_smooth = heatmap_smooth / heatmap_smooth.max()
+        
+        # Crear colormap personalizado (azul frío a rojo caliente)
+        colors = ['#000000', '#001a33', '#003366', '#0066cc', '#00ccff', 
+                  '#00ff99', '#ffff00', '#ff9900', '#ff3300', '#cc0000']
+        n_bins = 256
+        cmap = LinearSegmentedColormap.from_list('custom', colors, N=n_bins)
+        
+        # Mostrar solo la región de la cancha
+        h, w = heatmap_smooth.shape
+        court_region = heatmap_smooth[int(h*0.2):int(h*0.9), int(w*0.1):int(w*0.9)]
+        
+        plt.imshow(court_region, cmap=cmap, aspect='auto', interpolation='bilinear')
+        plt.colorbar(label='Densidad de Posiciones', shrink=0.8)
+        
+        plt.title('Mapa de Calor - Posiciones de Jugadores en Cancha', 
+                  fontsize=16, fontweight='bold', pad=20)
+        plt.xlabel('Ancho de la Cancha', fontsize=12)
+        plt.ylabel('Largo de la Cancha', fontsize=12)
+        
+        # Remover ticks para mejor visualización
+        plt.xticks([])
+        plt.yticks([])
+        
+        plt.savefig(os.path.join(self.output_dir, 'heatmap.png'), 
+                    dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+    
+    def _generate_text_summary(self, stats):
+        """Genera resumen en texto plano"""
+        summary = f"""
+╔══════════════════════════════════════════════════════════╗
+║          ANÁLISIS DE PARTIDO DE BADMINTON               ║
+╚══════════════════════════════════════════════════════════╝
+
+📊 ESTADÍSTICAS GENERALES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Total de golpes detectados: {stats['total_shots']}
+Errores no forzados estimados: {stats['unforced_errors']}
+
+🎯 TIPOS DE GOLPES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+        
+        for shot_type, count in stats['shot_types'].items():
+            percentage = (count / stats['total_shots'] * 100) if stats['total_shots'] > 0 else 0
+            summary += f"  • {shot_type.capitalize():12} : {count:3} ({percentage:.1f}%)\n"
+        
+        summary += f"""
+⚔️  ESTILO DE JUEGO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  • Ataque  : {stats['attack_percentage']}%
+  • Defensa : {stats['defense_percentage']}%
+
+📁 ARCHIVOS GENERADOS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  • stats.json - Datos en formato JSON
+  • shot_types.png - Gráfico de tipos de golpes
+  • attack_defense.png - Gráfico ataque vs defensa
+  • heatmap.png - Mapa de calor de posiciones
+  • summary.txt - Este resumen
+"""
+        
+        with open(os.path.join(self.output_dir, 'summary.txt'), 'w', encoding='utf-8') as f:
+            f.write(summary)
+        
+        print(summary)
+
+import numpy as np
+
+class MatchAnalyzer:
+    def __init__(self):
+        self.shots = []
+        self.positions = []
+        self.motion_history = []
+        self.last_shuttlecock_pos = None
+        self.shot_in_progress = False
+        self.frames_since_last_shot = 0
+        self.min_frames_between_shots = 15  # Mínimo ~0.5 segundos entre golpes
+        self.shuttlecock_trajectory = []  # Guardar trayectoria para mejor análisis
+        
+    def analyze_frame(self, detections, frame_num):
+        """Analiza un frame y extrae información del juego"""
+        
+        self.frames_since_last_shot += 1
+        
+        # Guardar posiciones de jugadores para mapa de calor
+        for player in detections['players']:
+            self.positions.append({
+                'x': player['x'],
+                'y': player['y'],
+                'frame': frame_num
+            })
+        
+        # Guardar historial de movimiento
+        self.motion_history.append(detections['motion_intensity'])
+        
+        # Detectar golpes solo si ha pasado suficiente tiempo
+        shuttlecock = detections['shuttlecock']
+        if shuttlecock:
+            # Guardar trayectoria del volante
+            self.shuttlecock_trajectory.append({'x': shuttlecock['x'], 'y': shuttlecock['y'], 'frame': frame_num})
+            
+            # Mantener solo últimos 30 frames de trayectoria
+            if len(self.shuttlecock_trajectory) > 30:
+                self.shuttlecock_trajectory.pop(0)
+            
+            if self.frames_since_last_shot >= self.min_frames_between_shots:
+                shot_type = self._classify_shot(shuttlecock, detections['motion_intensity'])
+                if shot_type:
+                    self.shots.append({
+                        'type': shot_type,
+                        'frame': frame_num,
+                        'position': shuttlecock
+                    })
+                    self.frames_since_last_shot = 0
+                    self.shuttlecock_trajectory = []  # Resetear trayectoria después de golpe
+            
+            self.last_shuttlecock_pos = shuttlecock
+    
+    def _classify_shot(self, shuttlecock, motion_intensity):
+        """Clasifica el tipo de golpe basado en trayectoria y velocidad"""
+        
+        if self.last_shuttlecock_pos is None:
+            return None
+        
+        # Calcular velocidad y dirección
+        dx = shuttlecock['x'] - self.last_shuttlecock_pos['x']
+        dy = shuttlecock['y'] - self.last_shuttlecock_pos['y']
+        speed = np.sqrt(dx**2 + dy**2)
+        
+        # Umbral mínimo más alto para considerar un golpe real
+        if speed < 15:
+            return None  # No hay golpe significativo
+        
+        # Analizar trayectoria completa para net shots
+        is_net_shot = self._is_net_shot(shuttlecock, speed)
+        if is_net_shot:
+            return 'net'
+        
+        # Remate: MUY alta velocidad hacia abajo con ángulo pronunciado
+        # Smash es el golpe más rápido y agresivo
+        if speed > 50 and dy > 25 and dy > abs(dx) * 0.7:
+            return 'smash'
+        
+        # Drop: velocidad media hacia abajo (más lento que smash)
+        if 15 < speed < 40 and dy > 10 and dy > abs(dx) * 0.5:
+            return 'drop'
+        
+        # Clear/Lob: hacia arriba con velocidad
+        if dy < -15 and speed > 20:
+            return 'clear'
+        
+        # Drive: horizontal rápido
+        if abs(dx) > abs(dy) * 1.5 and speed > 25:
+            return 'drive'
+        
+        return 'other'
+    
+    def _is_net_shot(self, current_pos, speed):
+        """Detecta si es un net shot basado en trayectoria y posición"""
+        if len(self.shuttlecock_trajectory) < 3:
+            return False
+        
+        # Net shot características:
+        # 1. Velocidad baja (golpe suave) 15-28
+        # 2. Movimiento corto y controlado
+        # 3. Se mantiene en la zona de red (parte superior de la cancha)
+        # 4. Trayectoria descendente muy suave o casi horizontal
+        
+        # Velocidad suave característica de net shot
+        if not (15 < speed < 28):
+            return False
+        
+        # Verificar si está en zona de red (tercio superior de la imagen)
+        # Ajustar según la perspectiva del video
+        h = 1080  # Altura típica
+        in_net_zone = current_pos['y'] < h * 0.45  # Zona superior/frontal
+        
+        if not in_net_zone:
+            return False
+        
+        # Analizar trayectoria reciente (últimos frames)
+        if len(self.shuttlecock_trajectory) >= 5:
+            recent = self.shuttlecock_trajectory[-5:]
+            
+            # Calcular distancia total recorrida
+            total_distance = 0
+            for i in range(1, len(recent)):
+                dx = recent[i]['x'] - recent[i-1]['x']
+                dy = recent[i]['y'] - recent[i-1]['y']
+                dist = np.sqrt(dx**2 + dy**2)
+                total_distance += dist
+            
+            avg_distance = total_distance / (len(recent) - 1)
+            
+            # Net shot: movimiento muy corto por frame (golpe contenido)
+            if avg_distance < 25:
+                return True
+        
+        # Detectar net shot por movimiento descendente muy suave
+        if len(self.shuttlecock_trajectory) >= 3:
+            recent = self.shuttlecock_trajectory[-3:]
+            
+            # Movimiento vertical
+            vertical_movement = recent[-1]['y'] - recent[0]['y']
+            horizontal_movement = abs(recent[-1]['x'] - recent[0]['x'])
+            
+            # Net shot: baja suavemente o se mantiene horizontal
+            # Movimiento vertical pequeño (3-25 pixels) en zona de red
+            if 3 < vertical_movement < 25 and in_net_zone:
+                # Verificar que no sea muy horizontal (eso sería drive)
+                if horizontal_movement < 40:
+                    return True
+            
+            # También detectar net shot casi horizontal (golpe de toque)
+            if abs(vertical_movement) < 15 and horizontal_movement < 35 and in_net_zone:
+                return True
+        
+        return False
+    
+    def get_statistics(self):
+        """Genera estadísticas del partido"""
+        
+        # Contar tipos de golpes
+        shot_counts = {}
+        for shot in self.shots:
+            shot_type = shot['type']
+            shot_counts[shot_type] = shot_counts.get(shot_type, 0) + 1
+        
+        # Calcular errores no forzados (golpes seguidos de baja actividad)
+        unforced_errors = self._estimate_errors()
+        
+        # Clasificar ataque vs defensa
+        attack_defense = self._classify_attack_defense()
+        
+        # Preparar datos para mapa de calor
+        heatmap_data = self._prepare_heatmap()
+        
+        return {
+            'total_shots': len(self.shots),
+            'shot_types': shot_counts,
+            'unforced_errors': unforced_errors,
+            'attack_percentage': attack_defense['attack'],
+            'defense_percentage': attack_defense['defense'],
+            'heatmap': heatmap_data,
+            'positions': self.positions
+        }
+    
+    def _estimate_errors(self):
+        """Estima errores no forzados basado en patrones de juego"""
+        errors = 0
+        
+        # Buscar golpes seguidos de caída brusca en actividad
+        for i in range(len(self.shots) - 1):
+            shot_frame = self.shots[i]['frame']
+            next_shot_frame = self.shots[i + 1]['frame']
+            
+            # Si hay mucho tiempo entre golpes, posible error
+            if next_shot_frame - shot_frame > 100:  # ~2 segundos a 30fps
+                errors += 1
+        
+        return errors
+    
+    def _classify_attack_defense(self):
+        """Clasifica golpes en ataque o defensa"""
+        attack_shots = ['smash', 'drop', 'net']
+        defense_shots = ['clear', 'drive']
+        
+        attack_count = sum(1 for shot in self.shots if shot['type'] in attack_shots)
+        defense_count = sum(1 for shot in self.shots if shot['type'] in defense_shots)
+        total = attack_count + defense_count
+        
+        if total == 0:
+            return {'attack': 0, 'defense': 0}
+        
+        return {
+            'attack': round(attack_count / total * 100, 1),
+            'defense': round(defense_count / total * 100, 1)
+        }
+    
+    def _prepare_heatmap(self):
+        """Prepara datos para el mapa de calor"""
+        if not self.positions:
+            return None
+        
+        # Crear matriz de densidad con resolución estándar
+        heatmap = np.zeros((1080, 1920))
+        
+        # Agrupar posiciones cercanas para evitar ruido
+        for pos in self.positions:
+            x, y = int(pos['x']), int(pos['y'])
+            if 0 <= x < 1920 and 0 <= y < 1080:
+                # Crear un área de influencia alrededor de cada posición
+                for dy in range(-15, 16):
+                    for dx in range(-15, 16):
+                        nx, ny = x + dx, y + dy
+                        if 0 <= nx < 1920 and 0 <= ny < 1080:
+                            # Peso gaussiano basado en distancia
+                            dist = np.sqrt(dx**2 + dy**2)
+                            weight = np.exp(-(dist**2) / (2 * 10**2))
+                            heatmap[ny, nx] += weight
+        
+        return heatmap
+
+from flask import Flask, render_template, request, jsonify, send_from_directory, Response
+from flask_cors import CORS
+import os
+import json
+from werkzeug.utils import secure_filename
+from detector_improved import BadmintonDetectorImproved
+from analyzer import MatchAnalyzer
+from visualizer import Visualizer
+import cv2
+import threading
+import time
+
+app = Flask(__name__)
+CORS(app)  # Habilitar CORS
+app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['OUTPUT_FOLDER'] = 'output'
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max
+
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
+
+# Estado del análisis
+analysis_status = {}
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/upload', methods=['POST'])
+def upload_video():
+    if 'video' not in request.files:
+        return jsonify({'error': 'No se encontró el video'}), 400
+    
+    file = request.files['video']
+    if file.filename == '':
+        return jsonify({'error': 'No se seleccionó ningún archivo'}), 400
+    
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    file.save(filepath)
+    
+    return jsonify({'success': True, 'filename': filename})
+
+@app.route('/analyze/<filename>', methods=['POST'])
+def analyze_video(filename):
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    
+    if not os.path.exists(filepath):
+        return jsonify({'error': 'Video no encontrado'}), 404
+    
+    # Iniciar análisis en segundo plano
+    analysis_id = filename.split('.')[0]
+    analysis_status[analysis_id] = {'progress': 0, 'status': 'processing', 'result': None}
+    
+    thread = threading.Thread(target=process_video, args=(filepath, filename, analysis_id))
+    thread.start()
+    
+    return jsonify({'success': True, 'analysis_id': analysis_id})
+
+def process_video(filepath, filename, analysis_id):
+    try:
+        # Inicializar componentes con detector mejorado (HOG)
+        detector = BadmintonDetectorImproved()
+        analyzer = MatchAnalyzer()
+        output_dir = os.path.join(app.config['OUTPUT_FOLDER'], filename.split('.')[0])
+        visualizer = Visualizer(output_dir)
+        
+        # Procesar video
+        cap = cv2.VideoCapture(filepath)
+        frame_count = 0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            if frame_count % 5 == 0:
+                detections = detector.detect(frame)
+                analyzer.analyze_frame(detections, frame_count)
+                
+                # Actualizar progreso
+                progress = int((frame_count / total_frames) * 80)  # 80% para procesamiento
+                analysis_status[analysis_id]['progress'] = progress
+            
+            frame_count += 1
+        
+        cap.release()
+        
+        # Generar estadísticas (20% restante)
+        analysis_status[analysis_id]['progress'] = 85
+        stats = analyzer.get_statistics()
+        
+        analysis_status[analysis_id]['progress'] = 90
+        visualizer.generate_report(stats)
+        
+        # Preparar respuesta
+        result = {
+            'success': True,
+            'stats': {
+                'total_shots': stats['total_shots'],
+                'shot_types': stats['shot_types'],
+                'unforced_errors': stats['unforced_errors'],
+                'attack_percentage': stats['attack_percentage'],
+                'defense_percentage': stats['defense_percentage']
+            },
+            'images': {
+                'shot_types': f'/output/{filename.split(".")[0]}/shot_types.png',
+                'attack_defense': f'/output/{filename.split(".")[0]}/attack_defense.png'
+            }
+        }
+        
+        analysis_status[analysis_id]['progress'] = 100
+        analysis_status[analysis_id]['status'] = 'completed'
+        analysis_status[analysis_id]['result'] = result
+        
+    except Exception as e:
+        analysis_status[analysis_id]['status'] = 'error'
+        analysis_status[analysis_id]['error'] = str(e)
+
+@app.route('/status/<analysis_id>')
+def get_status(analysis_id):
+    if analysis_id not in analysis_status:
+        return jsonify({'error': 'Análisis no encontrado'}), 404
+    
+    return jsonify(analysis_status[analysis_id])
+
+@app.route('/output/<path:filename>')
+def serve_output(filename):
+    return send_from_directory(app.config['OUTPUT_FOLDER'], filename)
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
