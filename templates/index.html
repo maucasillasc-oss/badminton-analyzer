@@ -31,6 +31,24 @@
             text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
         }
 
+        .header {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            margin-bottom: 30px;
+        }
+
+        .logo {
+            position: absolute;
+            right: 0;
+            top: 0;
+            width: 80px;
+            height: 80px;
+            object-fit: contain;
+            border-radius: 10px;
+        }
+
         .upload-section {
             background: white;
             border-radius: 15px;
@@ -206,6 +224,9 @@
 <body>
     <div class="container">
         <h1>🏸 Analizador de Badminton</h1>
+        <div class="header">
+            <img src="/static/logo.jpeg" alt="Logo Badminton" class="logo">
+        </div>
 
         <div class="upload-section">
             <div class="drop-zone" id="dropZone">
