@@ -106,7 +106,7 @@ class MatchAnalyzer:
         
         # Verificar si está en zona de red (tercio superior de la imagen)
         # Ajustar según la perspectiva del video
-        h = 1080  # Altura típica
+        h = 360  # Resolución reducida
         in_net_zone = current_pos['y'] < h * 0.45  # Zona superior/frontal
         
         if not in_net_zone:
@@ -216,21 +216,13 @@ class MatchAnalyzer:
         if not self.positions:
             return None
         
-        # Crear matriz de densidad con resolución estándar
-        heatmap = np.zeros((1080, 1920))
+        # Crear matriz de densidad con resolución reducida
+        heatmap = np.zeros((360, 640))
         
         # Agrupar posiciones cercanas para evitar ruido
         for pos in self.positions:
             x, y = int(pos['x']), int(pos['y'])
-            if 0 <= x < 1920 and 0 <= y < 1080:
-                # Crear un área de influencia alrededor de cada posición
-                for dy in range(-15, 16):
-                    for dx in range(-15, 16):
-                        nx, ny = x + dx, y + dy
-                        if 0 <= nx < 1920 and 0 <= ny < 1080:
-                            # Peso gaussiano basado en distancia
-                            dist = np.sqrt(dx**2 + dy**2)
-                            weight = np.exp(-(dist**2) / (2 * 10**2))
-                            heatmap[ny, nx] += weight
+            if 0 <= x < 640 and 0 <= y < 360:
+                heatmap[y, x] += 1
         
         return heatmap
