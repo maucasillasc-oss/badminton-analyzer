@@ -4,6 +4,7 @@ import base64
 import cv2
 import numpy as np
 import os
+from feedback import get_feedback_prompt
 
 class ClaudeAnalyzer:
     def __init__(self):
@@ -148,7 +149,7 @@ Responde SOLO con este JSON exacto:
     "observations": "descripción breve en español de lo que pasa en este segmento"
 }
 
-IMPORTANTE: Cuenta TODOS los golpes que veas. Cada vez que un jugador golpea el volante es un golpe. No subestimes la cantidad."""
+IMPORTANTE: Cuenta TODOS los golpes que veas. Cada vez que un jugador golpea el volante es un golpe. No subestimes la cantidad.""" + get_feedback_prompt()
         })
         
         try:
