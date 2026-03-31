@@ -75,17 +75,26 @@ def process_video(filepath, filename, analysis_id):
             if not ret:
                 break
             
-            if frame_count % 5 == 0:
-                detections = detector.detect(frame)
+            # Procesar cada 10 frames y redimensionar para ahorrar memoria
+            if frame_count % 10 == 0:
+                small_frame = cv2.resize(frame, (640, 360))
+                detections = detector.detect(small_frame)
                 analyzer.analyze_frame(detections, frame_count)
                 
                 # Actualizar progreso
-                progress = int((frame_count / total_frames) * 80)  # 80% para procesamiento
-                analysis_status[analysis_id]['progress'] = progress
+                if total_frames > 0:
+                    progress = int((frame_count / total_frames) * 80)
+                    analysis_status[analysis_id]['progress'] = progress
             
             frame_count += 1
         
         cap.release()
+        
+        # Limpiar video subido para liberar espacio
+        try:
+            os.remove(filepath)
+        except:
+            pass
         
         # Generar estadísticas (20% restante)
         analysis_status[analysis_id]['progress'] = 85
