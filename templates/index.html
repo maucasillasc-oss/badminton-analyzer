@@ -289,6 +289,24 @@
                     <img id="attackDefenseChart" src="" alt="Ataque vs Defensa">
                 </div>
             </div>
+
+            <div style="margin-top:30px; padding:25px; background:#fff8e1; border-radius:10px; border-left:4px solid #FFD700;">
+                <h3 style="margin-bottom:15px; color:#333;">📝 ¿El análisis es correcto? Ayúdanos a mejorar</h3>
+                <p style="color:#666; margin-bottom:15px;">Corrige los valores que no sean correctos. Tus correcciones mejoran los análisis futuros.</p>
+                
+                <div id="feedbackForm" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:10px;">
+                </div>
+                
+                <div style="margin-top:15px;">
+                    <textarea id="feedbackComment" placeholder="Comentarios adicionales (opcional)" 
+                        style="width:100%; padding:10px; border:1px solid #ddd; border-radius:5px; resize:vertical; min-height:60px;"></textarea>
+                </div>
+                
+                <button onclick="submitFeedback()" style="margin-top:10px; padding:10px 25px; background:#FFD700; border:none; border-radius:5px; cursor:pointer; font-weight:bold;">
+                    Enviar Corrección
+                </button>
+                <span id="feedbackMsg" style="margin-left:10px; color:green; display:none;">✓ Guardado</span>
+            </div>
         </div>
     </div>
 
@@ -422,8 +440,11 @@
             }, 1000); // Verificar cada segundo
         }
 
+        let originalStats = null;
+
         function displayResults(data) {
             const stats = data.stats;
+            originalStats = JSON.parse(JSON.stringify(stats));
             
             document.getElementById('totalShots').textContent = stats.total_shots;
             document.getElementById('attackPercent').textContent = stats.attack_percentage + '%';
@@ -441,6 +462,28 @@
                 document.getElementById('observations').textContent = stats.observations;
                 document.getElementById('observationsBox').style.display = 'block';
             }
+
+            // Generar formulario de feedback
+            const feedbackForm = document.getElementById('feedbackForm');
+            feedbackForm.innerHTML = '';
+            
+            for (const [type, count] of Object.entries(stats.shot_types)) {
+                feedbackForm.innerHTML += `
+                    <div style="text-align:center;">
+                        <label style="font-weight:bold; text-transform:capitalize; display:block; margin-bottom:5px;">${type}</label>
+                        <input type="number" id="fb_${type}" value="${count}" min="0" 
+                            style="width:80px; padding:8px; text-align:center; border:1px solid #ddd; border-radius:5px; font-size:1.1em;">
+                    </div>
+                `;
+            }
+            
+            feedbackForm.innerHTML += `
+                <div style="text-align:center;">
+                    <label style="font-weight:bold; display:block; margin-bottom:5px;">Errores NF</label>
+                    <input type="number" id="fb_errors" value="${stats.unforced_errors}" min="0" 
+                        style="width:80px; padding:8px; text-align:center; border:1px solid #ddd; border-radius:5px; font-size:1.1em;">
+                </div>
+            `;
 
             const shotTypesList = document.getElementById('shotTypesList');
             shotTypesList.innerHTML = '<h3 style="margin-bottom: 15px;">Tipos de Golpes</h3>';
@@ -464,6 +507,43 @@
         function showError(message) {
             errorMsg.textContent = '❌ ' + message;
             errorMsg.style.display = 'block';
+        }
+
+        function submitFeedback() {
+            if (!originalStats) return;
+            
+            const corrected = {};
+            for (const type of Object.keys(originalStats.shot_types)) {
+                const input = document.getElementById('fb_' + type);
+                if (input) corrected[type] = parseInt(input.value) || 0;
+            }
+            
+            const errorsInput = document.getElementById('fb_errors');
+            const correctedErrors = errorsInput ? parseInt(errorsInput.value) || 0 : 0;
+            
+            fetch('/feedback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    original: {
+                        shot_types: originalStats.shot_types,
+                        unforced_errors: originalStats.unforced_errors
+                    },
+                    corrected: {
+                        shot_types: corrected,
+                        unforced_errors: correctedErrors
+                    },
+                    comment: document.getElementById('feedbackComment').value
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    const msg = document.getElementById('feedbackMsg');
+                    msg.style.display = 'inline';
+                    setTimeout(() => msg.style.display = 'none', 3000);
+                }
+            });
         }
     </script>
 </body>
