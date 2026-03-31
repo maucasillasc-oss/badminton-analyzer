@@ -268,6 +268,15 @@
                     <div class="stat-value" id="errors">0</div>
                     <div class="stat-label">Errores No Forzados</div>
                 </div>
+                <div class="stat-card" id="scoreCard" style="display:none;">
+                    <div class="stat-value" id="score">-</div>
+                    <div class="stat-label">Marcador Detectado</div>
+                </div>
+            </div>
+
+            <div id="observationsBox" style="display:none; margin-bottom:20px; padding:20px; background:#f0f8ff; border-radius:10px; border-left:4px solid #0047AB;">
+                <h3 style="margin-bottom:10px; color:#0047AB;">🧠 Análisis Táctico (Claude AI)</h3>
+                <p id="observations" style="color:#333; line-height:1.6;"></p>
             </div>
 
             <div class="shot-types-list" id="shotTypesList"></div>
@@ -420,6 +429,18 @@
             document.getElementById('attackPercent').textContent = stats.attack_percentage + '%';
             document.getElementById('defensePercent').textContent = stats.defense_percentage + '%';
             document.getElementById('errors').textContent = stats.unforced_errors;
+
+            // Mostrar marcador si fue detectado
+            if (stats.score_detected) {
+                document.getElementById('score').textContent = stats.score_detected;
+                document.getElementById('scoreCard').style.display = 'block';
+            }
+
+            // Mostrar observaciones tácticas
+            if (stats.observations) {
+                document.getElementById('observations').textContent = stats.observations;
+                document.getElementById('observationsBox').style.display = 'block';
+            }
 
             const shotTypesList = document.getElementById('shotTypesList');
             shotTypesList.innerHTML = '<h3 style="margin-bottom: 15px;">Tipos de Golpes</h3>';
