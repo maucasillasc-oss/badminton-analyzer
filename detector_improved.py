@@ -42,8 +42,8 @@ class BadmintonDetectorImproved:
         court_right = int(w * 0.9)
         
         # Redimensionar para velocidad
-        scale = 0.5
-        small_frame = cv2.resize(frame, None, fx=scale, fy=scale)
+        scale = 1.0  # Ya viene redimensionado
+        small_frame = frame
         
         # Detectar personas
         try:
@@ -56,13 +56,7 @@ class BadmintonDetectorImproved:
             )
             
             for (x, y, w_box, h_box), weight in zip(boxes, weights):
-                # Escalar de vuelta a tamaño original
-                x = int(x / scale)
-                y = int(y / scale)
-                w_box = int(w_box / scale)
-                h_box = int(h_box / scale)
-                
-                # Centro y posición de pies
+                # Ya no necesita escalar
                 center_x = x + w_box // 2
                 center_y = y + h_box  # Pies del jugador
                 
