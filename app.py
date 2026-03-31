@@ -26,6 +26,10 @@ analysis_status = {}
 def index():
     return render_template('index.html')
 
+@app.route('/static/<path:filename>')
+def serve_static(filename):
+    return send_from_directory('static', filename)
+
 @app.route('/upload', methods=['POST'])
 def upload_video():
     if 'video' not in request.files:
