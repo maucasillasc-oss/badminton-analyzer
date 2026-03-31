@@ -18,14 +18,12 @@ class Visualizer:
         self._save_json(stats)
         
         # Generar gráfico de tipos de golpes
-        self._plot_shot_types(stats['shot_types'])
+        if stats.get('shot_types'):
+            self._plot_shot_types(stats['shot_types'])
         
         # Generar gráfico de ataque vs defensa
-        self._plot_attack_defense(stats)
-        
-        # Generar mapa de calor
-        if stats['heatmap'] is not None:
-            self._plot_heatmap(stats['heatmap'])
+        if stats.get('attack_percentage') and stats.get('defense_percentage'):
+            self._plot_attack_defense(stats)
         
         # Generar resumen en texto
         self._generate_text_summary(stats)
@@ -35,11 +33,11 @@ class Visualizer:
     def _save_json(self, stats):
         """Guarda estadísticas en formato JSON"""
         output = {
-            'total_shots': stats['total_shots'],
-            'shot_types': stats['shot_types'],
-            'unforced_errors': stats['unforced_errors'],
-            'attack_percentage': stats['attack_percentage'],
-            'defense_percentage': stats['defense_percentage']
+            'total_shots': stats.get('total_shots', 0),
+            'shot_types': stats.get('shot_types', {}),
+            'unforced_errors': stats.get('unforced_errors', 0),
+            'attack_percentage': stats.get('attack_percentage', 0),
+            'defense_percentage': stats.get('defense_percentage', 0)
         }
         
         with open(os.path.join(self.output_dir, 'stats.json'), 'w') as f:
@@ -133,22 +131,22 @@ class Visualizer:
 
 📊 ESTADÍSTICAS GENERALES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Total de golpes detectados: {stats['total_shots']}
-Errores no forzados estimados: {stats['unforced_errors']}
+Total de golpes detectados: {stats.get('total_shots', 0)}
+Errores no forzados estimados: {stats.get('unforced_errors', 0)}
 
 🎯 TIPOS DE GOLPES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
         
-        for shot_type, count in stats['shot_types'].items():
-            percentage = (count / stats['total_shots'] * 100) if stats['total_shots'] > 0 else 0
+        for shot_type, count in stats.get('shot_types', {}).items():
+            percentage = (count / stats.get('total_shots', 1) * 100) if stats.get('total_shots', 0) > 0 else 0
             summary += f"  • {shot_type.capitalize():12} : {count:3} ({percentage:.1f}%)\n"
         
         summary += f"""
 ⚔️  ESTILO DE JUEGO
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  • Ataque  : {stats['attack_percentage']}%
-  • Defensa : {stats['defense_percentage']}%
+  • Ataque  : {stats.get('attack_percentage', 0)}%
+  • Defensa : {stats.get('defense_percentage', 0)}%
 
 📁 ARCHIVOS GENERADOS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
