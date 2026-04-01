@@ -146,7 +146,7 @@ Responde SOLO con este JSON exacto:
     "attack_shots": cantidad de golpes ofensivos,
     "defense_shots": cantidad de golpes defensivos,
     "score_visible": "marcador si es visible en algún frame, o null",
-    "observations": "descripción breve en español de lo que pasa en este segmento"
+    "observations": "descripción breve en español de lo que pasa en este segmento (máximo 1 oración)"
 }
 
 IMPORTANTE: Cuenta TODOS los golpes que veas. Cada vez que un jugador golpea el volante es un golpe. No subestimes la cantidad.""" + get_feedback_prompt()
@@ -226,5 +226,5 @@ IMPORTANTE: Cuenta TODOS los golpes que veas. Cada vez que un jugador golpea el 
             'attack_percentage': attack_pct,
             'defense_percentage': defense_pct,
             'score_detected': score,
-            'observations': ' '.join(all_observations) if all_observations else 'No se pudieron generar observaciones.'
+            'observations': ' '.join(all_observations[:3]) if all_observations else 'No se pudieron generar observaciones.'
         }
