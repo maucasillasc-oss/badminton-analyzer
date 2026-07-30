@@ -229,6 +229,20 @@
             <img src="/static/logo.jpeg" alt="Logo Badminton" class="logo">
         </div>
 
+        <div style="text-align:center; margin-bottom:20px;">
+            <button onclick="showSection('upload')" style="padding:10px 20px; margin:5px; border:2px solid white; background:transparent; color:white; border-radius:8px; cursor:pointer; font-weight:bold;">📹 Analizar Video</button>
+            <button onclick="showSection('library')" style="padding:10px 20px; margin:5px; border:2px solid white; background:transparent; color:white; border-radius:8px; cursor:pointer; font-weight:bold;">📚 Mi Biblioteca</button>
+            <a href="/logout" style="padding:10px 20px; margin:5px; border:2px solid white; background:transparent; color:white; border-radius:8px; cursor:pointer; font-weight:bold; text-decoration:none; display:inline-block;">🚪 Salir</a>
+        </div>
+
+        <div id="librarySection" style="display:none;">
+            <div class="upload-section">
+                <h2 style="margin-bottom:20px;">📚 Mi Biblioteca de Videos</h2>
+                <div id="videoList" style="min-height:100px;">Cargando...</div>
+            </div>
+        </div>
+
+        <div id="uploadSection">
         <div class="upload-section">
             <div class="drop-zone" id="dropZone">
                 <div class="drop-zone-icon">📹</div>
@@ -258,12 +272,12 @@
                     <div class="stat-label">Total de Golpes</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value" id="attackPercent">0%</div>
-                    <div class="stat-label">Ataque</div>
+                    <div class="stat-value" id="avgRally">0</div>
+                    <div class="stat-label">Rally Promedio</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value" id="defensePercent">0%</div>
-                    <div class="stat-label">Defensa</div>
+                    <div class="stat-value" id="maxRally">0</div>
+                    <div class="stat-label">Rally Más Largo</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value" id="errors">0</div>
@@ -276,11 +290,24 @@
             </div>
 
             <div id="observationsBox" style="display:none; margin-bottom:20px; padding:20px; background:#f0f8ff; border-radius:10px; border-left:4px solid #0047AB;">
-                <h3 style="margin-bottom:10px; color:#0047AB;">🧠 Análisis Táctico (Claude AI)</h3>
+                <h3 style="margin-bottom:10px; color:#0047AB;">🧠 Análisis Táctico</h3>
                 <p id="observations" style="color:#333; line-height:1.6;"></p>
             </div>
 
             <div class="shot-types-list" id="shotTypesList"></div>
+
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px; margin-top:20px;">
+                <div id="player1Box" style="display:none; padding:20px; background:#e3f2fd; border-radius:10px; border-left:4px solid #0047AB;">
+                    <h3 style="color:#0047AB; margin-bottom:15px;">🏸 Jugador 1 (parte inferior)</h3>
+                    <div id="player1Stats"></div>
+                    <div id="player1Court" style="margin-top:15px;"></div>
+                </div>
+                <div id="player2Box" style="display:none; padding:20px; background:#fce4ec; border-radius:10px; border-left:4px solid #DC143C;">
+                    <h3 style="color:#DC143C; margin-bottom:15px;">🏸 Jugador 2 (parte superior)</h3>
+                    <div id="player2Stats"></div>
+                    <div id="player2Court" style="margin-top:15px;"></div>
+                </div>
+            </div>
 
             <div class="charts">
                 <div class="chart-container">
@@ -293,6 +320,19 @@
 
             <div style="margin-top:30px; padding:25px; background:#fff8e1; border-radius:10px; border-left:4px solid #FFD700;">
                 <h3 style="margin-bottom:15px; color:#333;">📝 ¿El análisis es correcto? Ayúdanos a mejorar</h3>
+
+            <div style="margin-top:30px; padding:25px; background:#f3e5f5; border-radius:10px; border-left:4px solid #7B1FA2;">
+                <h3 style="margin-bottom:15px; color:#7B1FA2;">💬 Pregunta sobre el partido</h3>
+                <div id="chatMessages" style="max-height:300px; overflow-y:auto; margin-bottom:15px;"></div>
+                <div style="display:flex; gap:10px;">
+                    <input type="text" id="chatInput" placeholder="Ej: ¿Qué debería mejorar el jugador 1?" 
+                        style="flex:1; padding:12px; border:1px solid #ddd; border-radius:8px; font-size:1em;"
+                        onkeypress="if(event.key==='Enter')sendChat()">
+                    <button onclick="sendChat()" style="padding:12px 20px; background:#7B1FA2; color:white; border:none; border-radius:8px; cursor:pointer; font-weight:bold;">
+                        Enviar
+                    </button>
+                </div>
+            </div>
                 <p style="color:#666; margin-bottom:15px;">Corrige los valores que no sean correctos. Tus correcciones mejoran los análisis futuros.</p>
                 
                 <div id="feedbackForm" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:10px;">
@@ -448,9 +488,12 @@
             originalStats = JSON.parse(JSON.stringify(stats));
             
             document.getElementById('totalShots').textContent = stats.total_shots;
-            document.getElementById('attackPercent').textContent = stats.attack_percentage + '%';
-            document.getElementById('defensePercent').textContent = stats.defense_percentage + '%';
             document.getElementById('errors').textContent = stats.unforced_errors;
+            
+            // Match stats
+            const ms = stats.match_stats || {};
+            document.getElementById('avgRally').textContent = ms.avg_rally_length || 0;
+            document.getElementById('maxRally').textContent = ms.max_rally_length || 0;
 
             // Mostrar marcador si fue detectado
             if (stats.score_detected) {
@@ -462,6 +505,37 @@
             if (stats.observations) {
                 document.getElementById('observations').textContent = stats.observations;
                 document.getElementById('observationsBox').style.display = 'block';
+            }
+
+            // Mostrar estadísticas por jugador
+            if (stats.player1 && stats.player1.shots > 0) {
+                document.getElementById('player1Box').style.display = 'block';
+                let p1Html = `<p><strong>Golpes:</strong> ${stats.player1.shots} | <strong>Winners:</strong> ${stats.player1.winners || 0}</p>`;
+                p1Html += `<p><strong>Ataque:</strong> ${stats.player1.attack_percentage}% | <strong>Defensa:</strong> ${stats.player1.defense_percentage}%</p>`;
+                p1Html += `<p><strong>Errores NF:</strong> ${stats.player1.unforced_errors} | <strong>Ratio W/E:</strong> ${stats.player1.we_ratio || 0}</p>`;
+                p1Html += `<p><strong>Pts ganados al sacar:</strong> ${stats.player1.points_won_on_serve || 0}</p>`;
+                p1Html += '<div style="margin-top:10px;">';
+                for (const [type, count] of Object.entries(stats.player1.shot_types || {})) {
+                    p1Html += `<span style="display:inline-block; margin:3px; padding:4px 8px; background:#0047AB; color:white; border-radius:5px; font-size:0.85em;">${type}: ${count}</span>`;
+                }
+                p1Html += '</div>';
+                document.getElementById('player1Stats').innerHTML = p1Html;
+                renderCourt('player1Court', stats.player1.shot_zones, '0,71,171');
+            }
+            
+            if (stats.player2 && stats.player2.shots > 0) {
+                document.getElementById('player2Box').style.display = 'block';
+                let p2Html = `<p><strong>Golpes:</strong> ${stats.player2.shots} | <strong>Winners:</strong> ${stats.player2.winners || 0}</p>`;
+                p2Html += `<p><strong>Ataque:</strong> ${stats.player2.attack_percentage}% | <strong>Defensa:</strong> ${stats.player2.defense_percentage}%</p>`;
+                p2Html += `<p><strong>Errores NF:</strong> ${stats.player2.unforced_errors} | <strong>Ratio W/E:</strong> ${stats.player2.we_ratio || 0}</p>`;
+                p2Html += `<p><strong>Pts ganados al sacar:</strong> ${stats.player2.points_won_on_serve || 0}</p>`;
+                p2Html += '<div style="margin-top:10px;">';
+                for (const [type, count] of Object.entries(stats.player2.shot_types || {})) {
+                    p2Html += `<span style="display:inline-block; margin:3px; padding:4px 8px; background:#DC143C; color:white; border-radius:5px; font-size:0.85em;">${type}: ${count}</span>`;
+                }
+                p2Html += '</div>';
+                document.getElementById('player2Stats').innerHTML = p2Html;
+                renderCourt('player2Court', stats.player2.shot_zones, '220,20,60');
             }
 
             // Generar formulario de feedback
@@ -545,6 +619,104 @@
                     setTimeout(() => msg.style.display = 'none', 3000);
                 }
             });
+        }
+
+        function renderCourt(elementId, zones, color) {
+            const el = document.getElementById(elementId);
+            if (!zones || !el) return;
+            el.innerHTML = `
+                <p style="font-weight:bold; margin-bottom:8px; font-size:0.9em;">Posicionamiento en cancha:</p>
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; grid-template-rows:1fr 1fr; gap:2px; width:100%; max-width:220px; height:160px; border:2px solid #333; background:#333; border-radius:4px;">
+                    <div style="background:rgba(${color},${zones.front_left/100}); display:flex; align-items:center; justify-content:center; font-size:0.8em; font-weight:bold;">${zones.front_left}%</div>
+                    <div style="background:rgba(${color},${zones.front_center/100}); display:flex; align-items:center; justify-content:center; font-size:0.8em; font-weight:bold;">${zones.front_center}%</div>
+                    <div style="background:rgba(${color},${zones.front_right/100}); display:flex; align-items:center; justify-content:center; font-size:0.8em; font-weight:bold;">${zones.front_right}%</div>
+                    <div style="background:rgba(${color},${zones.back_left/100}); display:flex; align-items:center; justify-content:center; font-size:0.8em; font-weight:bold;">${zones.back_left}%</div>
+                    <div style="background:rgba(${color},${zones.back_center/100}); display:flex; align-items:center; justify-content:center; font-size:0.8em; font-weight:bold;">${zones.back_center}%</div>
+                    <div style="background:rgba(${color},${zones.back_right/100}); display:flex; align-items:center; justify-content:center; font-size:0.8em; font-weight:bold;">${zones.back_right}%</div>
+                </div>
+                <div style="display:flex; justify-content:space-between; max-width:220px; font-size:0.7em; color:#666; margin-top:3px;">
+                    <span>← Red</span><span>Fondo →</span>
+                </div>
+            `;
+        }
+
+        function sendChat() {
+            const input = document.getElementById('chatInput');
+            const question = input.value.trim();
+            if (!question || !originalStats) return;
+
+            const messagesDiv = document.getElementById('chatMessages');
+            messagesDiv.innerHTML += `<div style="margin-bottom:10px; padding:8px 12px; background:#e8e8e8; border-radius:8px; text-align:right;"><strong>Tú:</strong> ${question}</div>`;
+            input.value = '';
+
+            fetch('/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question: question, analysis: originalStats })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    messagesDiv.innerHTML += `<div style="margin-bottom:10px; padding:8px 12px; background:#f3e5f5; border-radius:8px;"><strong>🏸 AI:</strong> ${data.answer}</div>`;
+                } else {
+                    messagesDiv.innerHTML += `<div style="margin-bottom:10px; padding:8px 12px; background:#ffebee; border-radius:8px; color:red;">Error: ${data.error}</div>`;
+                }
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            });
+        }
+
+        function showSection(section) {
+            document.getElementById('uploadSection').style.display = section === 'upload' ? 'block' : 'none';
+            document.getElementById('librarySection').style.display = section === 'library' ? 'block' : 'none';
+            if (section === 'library') loadLibrary();
+        }
+
+        function loadLibrary() {
+            fetch('/library')
+                .then(r => r.json())
+                .then(data => {
+                    const list = document.getElementById('videoList');
+                    if (!data.videos || data.videos.length === 0) {
+                        list.innerHTML = '<p style="color:#666; text-align:center;">No tienes videos subidos aún.</p>';
+                        return;
+                    }
+                    let html = '';
+                    data.videos.forEach(v => {
+                        const date = new Date(v.uploaded_at).toLocaleDateString('es-MX', {day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'});
+                        html += `<div style="display:flex; justify-content:space-between; align-items:center; padding:15px; margin-bottom:10px; background:#f8f9ff; border-radius:8px; border-left:3px solid #0047AB;">
+                            <div>
+                                <strong>📹 ${v.filename}</strong>
+                                <br><span style="color:#666; font-size:0.85em;">${date}</span>
+                            </div>
+                            <div>
+                                <button onclick="playVideo('${v.filename}')" style="padding:8px 15px; background:#0047AB; color:white; border:none; border-radius:5px; cursor:pointer; margin-right:5px;">▶ Ver</button>
+                                <button onclick="downloadVideo('${v.filename}')" style="padding:8px 15px; background:#00CED1; color:white; border:none; border-radius:5px; cursor:pointer;">⬇ Descargar</button>
+                            </div>
+                        </div>`;
+                    });
+                    html += '<div id="videoPlayer" style="display:none; margin-top:20px; text-align:center;"><video id="videoEl" controls style="max-width:100%; max-height:500px; border-radius:10px; box-shadow:0 5px 15px rgba(0,0,0,0.2);"></video><br><button onclick="closePlayer()" style="margin-top:10px; padding:8px 20px; background:#DC143C; color:white; border:none; border-radius:5px; cursor:pointer;">✕ Cerrar</button></div>';
+                    list.innerHTML = html;
+                });
+        }
+
+        function playVideo(filename) {
+            const player = document.getElementById('videoPlayer');
+            const video = document.getElementById('videoEl');
+            video.src = '/library/download/' + filename;
+            player.style.display = 'block';
+            video.play();
+        }
+
+        function closePlayer() {
+            const player = document.getElementById('videoPlayer');
+            const video = document.getElementById('videoEl');
+            video.pause();
+            video.src = '';
+            player.style.display = 'none';
+        }
+
+        function downloadVideo(filename) {
+            window.open('/library/download/' + filename, '_blank');
         }
     </script>
 </body>
