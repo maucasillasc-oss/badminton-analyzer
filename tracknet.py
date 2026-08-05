@@ -1,180 +1,265 @@
+"""
+TrackNetV3 Shuttlecock Tracker
+Usa el modelo TrackNetV3 pre-entrenado para detectar el volante frame a frame.
+Los pesos se descargan de Google Drive al iniciar.
+"""
 import torch
-import torch.nn as nn
-import cv2
 import numpy as np
+import cv2
+import os
+import gdown
+from tracknet_model import TrackNet, InpaintNet
 
-class TrackNetModel(nn.Module):
-    """TrackNet: modelo para tracking de volante en badminton
-    Basado en el paper TrackNet (2019) - simplificado para inferencia"""
+# Configuración
+TRACKNET_WEIGHTS_URL = "https://drive.google.com/uc?id=1CfzE87a0f6LhBp0kniSl1-89zaLCZ8cA"
+WEIGHTS_DIR = "ckpts"
+TRACKNET_FILE = os.path.join(WEIGHTS_DIR, "TrackNet_best.pt")
+INPAINTNET_FILE = os.path.join(WEIGHTS_DIR, "InpaintNet_best.pt")
+
+# Dimensiones de entrada de TrackNet
+INPUT_H = 288
+INPUT_W = 512
+SEQ_LEN = 8  # TrackNetV3 usa secuencias de 8 frames
+
+
+def download_weights():
+    """Descarga los pesos pre-entrenados si no existen"""
+    if os.path.exists(TRACKNET_FILE) and os.path.exists(INPAINTNET_FILE):
+        return
+    
+    os.makedirs(WEIGHTS_DIR, exist_ok=True)
+    zip_path = os.path.join(WEIGHTS_DIR, "TrackNetV3_ckpts.zip")
+    
+    print("Descargando pesos de TrackNetV3...")
+    gdown.download(TRACKNET_WEIGHTS_URL, zip_path, quiet=False)
+    
+    # Descomprimir
+    import zipfile
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(WEIGHTS_DIR)
+    
+    # Mover archivos si están en subcarpeta
+    for root, dirs, files in os.walk(WEIGHTS_DIR):
+        for f in files:
+            if f.endswith('.pt'):
+                src = os.path.join(root, f)
+                dst = os.path.join(WEIGHTS_DIR, f)
+                if src != dst:
+                    os.rename(src, dst)
+    
+    # Limpiar zip
+    if os.path.exists(zip_path):
+        os.remove(zip_path)
+    
+    print("✓ Pesos descargados")
+
+
+class TrackNetTracker:
+    """Tracker de volante usando TrackNetV3 pre-entrenado"""
     
     def __init__(self):
-        super(TrackNetModel, self).__init__()
+        download_weights()
         
-        # Encoder (3 frames RGB como input = 9 canales)
-        self.encoder = nn.Sequential(
-            nn.Conv2d(9, 64, 3, padding=1), nn.ReLU(), nn.BatchNorm2d(64),
-            nn.Conv2d(64, 64, 3, padding=1), nn.ReLU(), nn.BatchNorm2d(64),
-            nn.MaxPool2d(2, 2),
-            
-            nn.Conv2d(64, 128, 3, padding=1), nn.ReLU(), nn.BatchNorm2d(128),
-            nn.Conv2d(128, 128, 3, padding=1), nn.ReLU(), nn.BatchNorm2d(128),
-            nn.MaxPool2d(2, 2),
-            
-            nn.Conv2d(128, 256, 3, padding=1), nn.ReLU(), nn.BatchNorm2d(256),
-            nn.Conv2d(256, 256, 3, padding=1), nn.ReLU(), nn.BatchNorm2d(256),
-            nn.Conv2d(256, 256, 3, padding=1), nn.ReLU(), nn.BatchNorm2d(256),
-            nn.MaxPool2d(2, 2),
-        )
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"TrackNet usando: {self.device}")
         
-        # Decoder
-        self.decoder = nn.Sequential(
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(256, 256, 3, padding=1), nn.ReLU(), nn.BatchNorm2d(256),
-            nn.Conv2d(256, 256, 3, padding=1), nn.ReLU(), nn.BatchNorm2d(256),
-            nn.Conv2d(256, 128, 3, padding=1), nn.ReLU(), nn.BatchNorm2d(128),
-            
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(128, 128, 3, padding=1), nn.ReLU(), nn.BatchNorm2d(128),
-            nn.Conv2d(128, 64, 3, padding=1), nn.ReLU(), nn.BatchNorm2d(64),
-            
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(64, 64, 3, padding=1), nn.ReLU(), nn.BatchNorm2d(64),
-            nn.Conv2d(64, 1, 1), nn.Sigmoid()
-        )
+        # Cargar modelo TrackNet
+        # in_dim = SEQ_LEN * 3 (RGB) + 3 (background) = 27
+        # out_dim = SEQ_LEN = 8
+        self.tracknet = TrackNet(in_dim=SEQ_LEN * 3 + 3, out_dim=SEQ_LEN)
+        
+        if os.path.exists(TRACKNET_FILE):
+            checkpoint = torch.load(TRACKNET_FILE, map_location=self.device)
+            self.tracknet.load_state_dict(checkpoint)
+            print("✓ TrackNet cargado")
+        else:
+            print("⚠ Pesos de TrackNet no encontrados, usando sin pre-entrenar")
+        
+        self.tracknet.to(self.device)
+        self.tracknet.eval()
+        
+        # Cargar InpaintNet para rectificación de trayectoria
+        self.inpaintnet = InpaintNet()
+        if os.path.exists(INPAINTNET_FILE):
+            checkpoint = torch.load(INPAINTNET_FILE, map_location=self.device)
+            self.inpaintnet.load_state_dict(checkpoint)
+            print("✓ InpaintNet cargado")
+        
+        self.inpaintnet.to(self.device)
+        self.inpaintnet.eval()
+        
+        # Buffer de frames
+        self.frame_buffer = []
+        self.background = None
+        self.positions = []  # Lista de (x, y, visibility) por frame
     
-    def forward(self, x):
-        x = self.encoder(x)
-        x = self.decoder(x)
-        return x
-
-
-class ShuttlecockTracker:
-    """Tracker de volante usando detección por movimiento optimizada"""
+    def estimate_background(self, video_path, num_samples=50):
+        """Estima el fondo del video usando la mediana de frames"""
+        cap = cv2.VideoCapture(video_path)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        # Seleccionar frames uniformemente distribuidos
+        indices = np.linspace(0, total_frames - 1, num_samples, dtype=int)
+        frames = []
+        
+        for idx in indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if ret:
+                small = cv2.resize(frame, (INPUT_W, INPUT_H))
+                frames.append(small)
+        
+        cap.release()
+        
+        if frames:
+            # Mediana para estimar background (elimina objetos en movimiento)
+            self.background = np.median(frames, axis=0).astype(np.uint8)
+        else:
+            self.background = np.zeros((INPUT_H, INPUT_W, 3), dtype=np.uint8)
     
-    def __init__(self):
-        self.input_h = 288
-        self.input_w = 512
+    def process_video(self, video_path, progress_callback=None):
+        """Procesa el video completo y devuelve posiciones del volante"""
+        # Estimar background
+        self.estimate_background(video_path)
+        
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
         self.positions = []
-        self.prev_frames = []
+        self.frame_buffer = []
+        frame_count = 0
+        
+        # Background normalizado
+        bg_tensor = self._frame_to_tensor(self.background)
+        
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Redimensionar
+            small = cv2.resize(frame, (INPUT_W, INPUT_H))
+            self.frame_buffer.append(small)
+            
+            # Cuando tenemos suficientes frames, procesar batch
+            if len(self.frame_buffer) == SEQ_LEN:
+                positions_batch = self._predict_batch(bg_tensor)
+                self.positions.extend(positions_batch)
+                
+                # Mantener último frame para solapamiento
+                self.frame_buffer = self.frame_buffer[SEQ_LEN:]
+            
+            frame_count += 1
+            if progress_callback and frame_count % 100 == 0:
+                progress_callback(int((frame_count / total_frames) * 50))
+        
+        # Procesar frames restantes
+        if self.frame_buffer:
+            # Pad con el último frame hasta completar SEQ_LEN
+            while len(self.frame_buffer) < SEQ_LEN:
+                self.frame_buffer.append(self.frame_buffer[-1])
+            positions_batch = self._predict_batch(bg_tensor)
+            self.positions.extend(positions_batch[:len(self.frame_buffer)])
+        
+        cap.release()
+        
+        return {
+            'positions': self.positions,
+            'fps': fps,
+            'total_frames': total_frames
+        }
     
-    def process_frame(self, frame):
-        """Procesa un frame y devuelve la posición del volante"""
-        small = cv2.resize(frame, (self.input_w, self.input_h))
-        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-        
-        self.prev_frames.append(gray)
-        
-        # Necesitamos al menos 3 frames
-        if len(self.prev_frames) < 3:
-            return None
-        
-        # Mantener solo los últimos 3
-        if len(self.prev_frames) > 3:
-            self.prev_frames.pop(0)
-        
-        # Detectar el volante por diferencia temporal multi-frame
-        pos = self._detect_shuttlecock_multiframe()
-        
-        if pos:
-            # Escalar de vuelta a resolución original
-            scale_x = frame.shape[1] / self.input_w
-            scale_y = frame.shape[0] / self.input_h
-            real_pos = (int(pos[0] * scale_x), int(pos[1] * scale_y))
-            self.positions.append(real_pos)
-            return real_pos
-        
-        return None
+    def _frame_to_tensor(self, frame):
+        """Convierte frame BGR a tensor normalizado"""
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        tensor = torch.FloatTensor(rgb).permute(2, 0, 1) / 255.0
+        return tensor
     
-    def _detect_shuttlecock_multiframe(self):
-        """Detecta volante usando diferencia entre 3 frames consecutivos"""
-        f1, f2, f3 = self.prev_frames[-3], self.prev_frames[-2], self.prev_frames[-1]
+    @torch.no_grad()
+    def _predict_batch(self, bg_tensor):
+        """Predice posiciones del volante para un batch de SEQ_LEN frames"""
+        # Construir input: concatenar frames + background
+        frame_tensors = []
+        for frame in self.frame_buffer[:SEQ_LEN]:
+            frame_tensors.append(self._frame_to_tensor(frame))
         
-        # Diferencia temporal: objetos que se mueven rápido aparecen en ambas diferencias
-        diff1 = cv2.absdiff(f2, f1)
-        diff2 = cv2.absdiff(f3, f2)
+        # Input shape: (1, SEQ_LEN*3 + 3, H, W)
+        input_tensor = torch.cat(frame_tensors + [bg_tensor], dim=0).unsqueeze(0)
+        input_tensor = input_tensor.to(self.device)
         
-        # AND: solo objetos que se movieron en AMBOS intervalos (movimiento continuo)
-        combined = cv2.bitwise_and(diff1, diff2)
+        # Predicción
+        output = self.tracknet(input_tensor)  # (1, SEQ_LEN, H, W)
         
-        # Umbral alto para solo objetos muy rápidos
-        _, thresh = cv2.threshold(combined, 55, 255, cv2.THRESH_BINARY)
+        # Extraer posiciones de cada frame
+        positions = []
+        for i in range(SEQ_LEN):
+            heatmap = output[0, i].cpu().numpy()
+            pos = self._heatmap_to_position(heatmap)
+            positions.append(pos)
         
-        # Erosión + dilatación para limpiar ruido
-        kernel_small = np.ones((2, 2), np.uint8)
-        kernel_big = np.ones((4, 4), np.uint8)
-        thresh = cv2.erode(thresh, kernel_small, iterations=1)
-        thresh = cv2.dilate(thresh, kernel_big, iterations=1)
-        
-        # Encontrar contornos
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Filtrar: volante es pequeño (5-200 px²) y relativamente circular
-        candidates = []
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if 5 < area < 200:
-                x, y, w, h = cv2.boundingRect(contour)
-                aspect = w / h if h > 0 else 0
-                if 0.2 < aspect < 5.0:  # No muy alargado
-                    center = (x + w // 2, y + h // 2)
-                    candidates.append({'pos': center, 'area': area})
-        
-        if not candidates:
-            return None
-        
-        # Si hay posiciones previas, elegir el candidato más cercano al último
-        if self.positions:
-            last = self.positions[-1]
-            # Escalar last a resolución pequeña
-            scale_x = self.input_w / (last[0] / (self.positions[-1][0] / last[0]) if last[0] > 0 else self.input_w)
-            # Simplificar: elegir el más pequeño (volante es pequeño)
-            best = min(candidates, key=lambda c: c['area'])
-            return best['pos']
-        else:
-            # Primera detección: elegir el más pequeño
-            best = min(candidates, key=lambda c: c['area'])
-            return best['pos']
+        return positions
     
-    def detect_shot(self, min_direction_change=20):
-        """Detecta si hubo un golpe basado en cambio de dirección del volante"""
-        if len(self.positions) < 5:
-            return False
+    def _heatmap_to_position(self, heatmap, threshold=0.5):
+        """Convierte heatmap a coordenada (x, y)"""
+        if heatmap.max() < threshold:
+            return None  # No se detectó volante
         
-        recent = self.positions[-5:]
+        # Encontrar el máximo
+        y, x = np.unravel_index(heatmap.argmax(), heatmap.shape)
         
-        # Vector de movimiento actual
-        dx1 = recent[-1][0] - recent[-2][0]
-        dy1 = recent[-1][1] - recent[-2][1]
-        
-        # Vector de movimiento anterior
-        dx2 = recent[-3][0] - recent[-4][0]
-        dy2 = recent[-3][1] - recent[-4][1]
-        
-        # Cambio de dirección vertical (más importante en badminton)
-        vertical_change = abs(dy1 - dy2)
-        
-        # Velocidad actual
-        speed = np.sqrt(dx1**2 + dy1**2)
-        
-        # Un golpe = cambio de dirección vertical significativo + velocidad alta
-        if vertical_change > min_direction_change and speed > 12:
-            return True
-        
-        return False
+        # Escalar a resolución original no es necesario aquí,
+        # se hace después según la resolución del video
+        return (int(x), int(y), float(heatmap.max()))
     
-    def get_trajectory_direction(self):
-        """Devuelve la dirección de la trayectoria actual"""
-        if len(self.positions) < 3:
-            return 'unknown'
+    def detect_shots(self, min_frames_between=20):
+        """Detecta golpes basado en cambios de dirección del volante"""
+        shots = []
+        last_shot_idx = -min_frames_between
         
-        dy = self.positions[-1][1] - self.positions[-3][1]
-        dx = self.positions[-1][0] - self.positions[-3][0]
-        speed = np.sqrt(dx**2 + dy**2)
+        # Filtrar posiciones válidas
+        valid_positions = []
+        for i, pos in enumerate(self.positions):
+            if pos is not None:
+                valid_positions.append((i, pos[0], pos[1]))
         
-        if speed < 3:
-            return 'still'
+        if len(valid_positions) < 5:
+            return shots
         
-        if abs(dy) > abs(dx):
-            return 'down' if dy > 0 else 'up'
-        else:
-            return 'right' if dx > 0 else 'left'
+        # Detectar cambios de dirección
+        for i in range(4, len(valid_positions)):
+            frame_idx = valid_positions[i][0]
+            
+            if (frame_idx - last_shot_idx) < min_frames_between:
+                continue
+            
+            # Vectores de movimiento
+            # Actual
+            dx1 = valid_positions[i][1] - valid_positions[i-1][1]
+            dy1 = valid_positions[i][2] - valid_positions[i-1][2]
+            
+            # Anterior
+            dx2 = valid_positions[i-2][1] - valid_positions[i-3][1]
+            dy2 = valid_positions[i-2][2] - valid_positions[i-3][2]
+            
+            # Velocidad
+            speed = np.sqrt(dx1**2 + dy1**2)
+            
+            # Cambio de dirección vertical (clave en badminton)
+            vertical_change = abs(dy1 - dy2)
+            
+            # Cambio de signo en Y (volante cambió de subir a bajar o viceversa)
+            sign_change = (dy1 * dy2) < 0
+            
+            # Golpe = cambio significativo de dirección vertical + velocidad
+            if (vertical_change > 15 or sign_change) and speed > 8:
+                shots.append({
+                    'frame_idx': frame_idx,
+                    'x': valid_positions[i][1],
+                    'y': valid_positions[i][2],
+                    'speed': speed,
+                    'direction': 'down' if dy1 > 0 else 'up'
+                })
+                last_shot_idx = frame_idx
+        
+        return shots
