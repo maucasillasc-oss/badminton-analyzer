@@ -1,107 +1,104 @@
+"""
+Shot Detector: YOLO + TrackNetV3 + lógica de detección de golpes
+- TrackNetV3: Detecta posición del volante con 97.5% de precisión
+- YOLO: Detecta y rastrea jugadores
+- Lógica: Combina ambos para determinar golpes, quién golpeó, y tipo
+"""
 import cv2
 import numpy as np
 from ultralytics import YOLO
-from collections import deque
-from tracknet import ShuttlecockTracker
+from tracknet import TrackNetTracker, INPUT_H, INPUT_W
 
 class ShotDetector:
-    """Detecta golpes usando YOLO para jugadores + TrackNet para volante"""
-    
     def __init__(self):
-        # YOLO para detectar personas
-        self.model = YOLO('yolov8n.pt')
+        # YOLO para jugadores
+        self.yolo = YOLO('yolov8n.pt')
         
-        # TrackNet para tracking del volante
-        self.tracker = ShuttlecockTracker()
-        
-        # Parámetros de detección de golpes
-        self.shots = []
-        self.min_frames_between_shots = 30  # ~1 segundo entre golpes mínimo
-        self.last_shot_frame = -self.min_frames_between_shots
+        # TrackNet para volante
+        self.tracker = TrackNetTracker()
     
     def process_video(self, video_path, progress_callback=None):
-        """Procesa el video completo y devuelve los golpes detectados"""
+        """Pipeline completo: TrackNet + YOLO + detección de golpes"""
+        
+        # Paso 1: TrackNet detecta trayectoria del volante
+        if progress_callback:
+            progress_callback(5)
+        
+        track_result = self.tracker.process_video(video_path, progress_callback)
+        fps = track_result['fps']
+        total_frames = track_result['total_frames']
+        
+        if progress_callback:
+            progress_callback(55)
+        
+        # Paso 2: Detectar golpes por cambio de dirección
+        # min_frames_between = fps * 0.5 (mínimo 0.5 seg entre golpes)
+        min_between = max(int(fps * 0.5), 12)
+        raw_shots = self.tracker.detect_shots(min_frames_between=min_between)
+        
+        if progress_callback:
+            progress_callback(60)
+        
+        # Paso 3: YOLO detecta jugadores en frames de golpe para saber quién golpeó
         cap = cv2.VideoCapture(video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        
-        # Zona de la cancha central
-        court_left = int(frame_w * 0.15)
-        court_right = int(frame_w * 0.85)
         mid_y = frame_h // 2
         
-        frame_count = 0
-        rallies = []
-        current_rally_shots = 0
-        frames_without_shot = 0
-        
-        while cap.isOpened():
+        shots = []
+        for i, raw_shot in enumerate(raw_shots):
+            frame_idx = raw_shot['frame_idx']
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
+            
             if not ret:
-                break
+                continue
             
-            # Recortar a cancha central
-            court_frame = frame[:, court_left:court_right]
+            # Detectar jugadores en este frame
+            players = self._detect_players(frame, mid_y)
             
-            # TrackNet: detectar volante en cada frame
-            shuttle_pos = self.tracker.process_frame(court_frame)
+            # Escalar posición del volante de TrackNet a resolución original
+            scale_x = frame_w / INPUT_W
+            scale_y = frame_h / INPUT_H
+            shuttle_x = int(raw_shot['x'] * scale_x)
+            shuttle_y = int(raw_shot['y'] * scale_y)
             
-            # Cada 3 frames: detectar jugadores con YOLO
-            players = None
-            if frame_count % 3 == 0:
-                players = self._detect_players(court_frame, mid_y)
+            # Determinar quién golpeó (jugador más cercano al volante)
+            player = self._who_hit(players, shuttle_x, shuttle_y, mid_y)
             
-            # Detectar golpe por cambio de dirección del volante
-            if (frame_count - self.last_shot_frame) >= self.min_frames_between_shots:
-                is_shot = self.tracker.detect_shot(min_direction_change=45)
-                
-                if is_shot and shuttle_pos:
-                    # Determinar quién golpeó
-                    player = 'J1' if shuttle_pos[1] > mid_y * 0.5 else 'J2'
-                    
-                    # Clasificar tipo de golpe
-                    direction = self.tracker.get_trajectory_direction()
-                    speed = self._get_shuttle_speed()
-                    shot_type = self._classify_shot(direction, speed, shuttle_pos, mid_y, frame_h)
-                    
-                    # Zona
-                    zone = self._get_zone(shuttle_pos[0], shuttle_pos[1], mid_y, court_right - court_left)
-                    
-                    self.shots.append({
-                        'frame': frame_count,
-                        'timestamp': round(frame_count / fps, 1),
-                        'player': player,
-                        'type': shot_type,
-                        'speed': speed,
-                        'zone': zone
-                    })
-                    
-                    self.last_shot_frame = frame_count
-                    current_rally_shots += 1
-                    frames_without_shot = 0
-                else:
-                    frames_without_shot += 1
+            # Clasificar tipo de golpe
+            shot_type = self._classify_shot(
+                raw_shot['direction'], 
+                raw_shot['speed'],
+                shuttle_y, mid_y, frame_h
+            )
             
-            # Detectar fin de rally (2.5+ segundos sin golpe)
-            if current_rally_shots > 0 and frames_without_shot > fps * 2.5:
-                rallies.append({'length': current_rally_shots})
-                current_rally_shots = 0
+            # Zona de la cancha
+            zone = self._get_zone(shuttle_x, shuttle_y, mid_y, frame_w)
             
-            frame_count += 1
+            shots.append({
+                'frame': frame_idx,
+                'timestamp': round(frame_idx / fps, 1),
+                'player': player,
+                'type': shot_type,
+                'speed': raw_shot['speed'],
+                'zone': zone,
+                'shuttle_pos': (shuttle_x, shuttle_y)
+            })
             
-            if progress_callback and frame_count % 100 == 0:
-                progress_callback(int((frame_count / total_frames) * 70))
-        
-        # Cerrar último rally
-        if current_rally_shots > 0:
-            rallies.append({'length': current_rally_shots})
+            if progress_callback and i % 5 == 0:
+                progress_callback(60 + int((i / max(len(raw_shots), 1)) * 10))
         
         cap.release()
         
+        if progress_callback:
+            progress_callback(70)
+        
+        # Paso 4: Construir rallies
+        rallies = self._build_rallies(shots, fps)
+        
         return {
-            'shots': self.shots,
+            'shots': shots,
             'rallies': rallies,
             'fps': fps,
             'total_frames': total_frames
@@ -109,7 +106,7 @@ class ShotDetector:
     
     def _detect_players(self, frame, mid_y):
         """Detecta jugadores con YOLO"""
-        results = self.model(frame, verbose=False, conf=0.4, classes=[0])
+        results = self.yolo(frame, verbose=False, conf=0.4, classes=[0])
         players = {'top': None, 'bottom': None}
         
         for result in results:
@@ -119,43 +116,45 @@ class ShotDetector:
                 center_x = (x1 + x2) / 2
                 
                 if foot_y > mid_y:
-                    players['bottom'] = {'x': center_x, 'y': foot_y}
+                    if players['bottom'] is None or box.conf[0] > 0.5:
+                        players['bottom'] = {'x': center_x, 'y': foot_y}
                 else:
-                    players['top'] = {'x': center_x, 'y': foot_y}
+                    if players['top'] is None or box.conf[0] > 0.5:
+                        players['top'] = {'x': center_x, 'y': foot_y}
         
         return players
     
-    def _get_shuttle_speed(self):
-        """Calcula velocidad del volante"""
-        positions = self.tracker.positions
-        if len(positions) < 3:
-            return 0
-        dx = positions[-1][0] - positions[-3][0]
-        dy = positions[-1][1] - positions[-3][1]
-        return np.sqrt(dx**2 + dy**2)
+    def _who_hit(self, players, shuttle_x, shuttle_y, mid_y):
+        """Determina quién golpeó basado en proximidad"""
+        # Si el volante está en la mitad inferior, probablemente J1 golpeó
+        # Si está en la mitad superior, probablemente J2 golpeó
+        if shuttle_y > mid_y:
+            return 'J1'
+        else:
+            return 'J2'
     
-    def _classify_shot(self, direction, speed, shuttle_pos, mid_y, frame_h):
-        """Clasifica el tipo de golpe"""
-        net_zone = abs(shuttle_pos[1] - mid_y) < (frame_h * 0.15)
+    def _classify_shot(self, direction, speed, shuttle_y, mid_y, frame_h):
+        """Clasifica el tipo de golpe basado en trayectoria"""
+        net_zone = abs(shuttle_y - mid_y) < (frame_h * 0.12)
         
-        # Smash: muy rápido y hacia abajo
-        if speed > 35 and direction == 'down':
+        # Smash: rápido y bajando
+        if speed > 30 and direction == 'down':
             return 'smash'
         
-        # Clear: hacia arriba con velocidad
+        # Clear: subiendo con velocidad
         if direction == 'up' and speed > 15:
             return 'clear'
         
         # Net: cerca de la red y lento
-        if net_zone and speed < 20:
+        if net_zone and speed < 18:
             return 'net'
         
-        # Drop: bajando suavemente
-        if direction == 'down' and speed < 25:
+        # Drop: bajando suave
+        if direction == 'down' and speed < 20:
             return 'drop'
         
-        # Drive: horizontal
-        if direction in ('left', 'right') and speed > 15:
+        # Drive: velocidad media
+        if 12 < speed < 30:
             return 'drive'
         
         return 'other'
@@ -163,7 +162,6 @@ class ShotDetector:
     def _get_zone(self, x, y, mid_y, frame_w):
         """Determina la zona de la cancha"""
         third_w = frame_w / 3
-        
         prefix = 'front' if y < mid_y else 'back'
         
         if x < third_w:
@@ -174,3 +172,24 @@ class ShotDetector:
             suffix = '_right'
         
         return prefix + suffix
+    
+    def _build_rallies(self, shots, fps):
+        """Construye rallies basado en gaps entre golpes"""
+        rallies = []
+        current_rally = 0
+        
+        for i in range(len(shots)):
+            current_rally += 1
+            
+            # Si hay un gap de >3 segundos al siguiente golpe, fin de rally
+            if i < len(shots) - 1:
+                gap = (shots[i+1]['frame'] - shots[i]['frame']) / fps
+                if gap > 3.0:
+                    rallies.append({'length': current_rally})
+                    current_rally = 0
+        
+        # Último rally
+        if current_rally > 0:
+            rallies.append({'length': current_rally})
+        
+        return rallies
