@@ -1,13 +1,9 @@
-FROM nvidia/cuda:11.8-runtime-ubuntu22.04
+FROM python:3.11-slim
 
-# Evitar prompts interactivos
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Instalar Python y dependencias del sistema
+# Instalar dependencias del sistema
 RUN apt-get update && apt-get install -y \
-    python3.11 python3.11-venv python3-pip \
     libgl1-mesa-glx libglib2.0-0 libxcb1 \
-    ffmpeg wget git \
+    ffmpeg wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Crear directorio de la app
@@ -15,7 +11,7 @@ WORKDIR /app
 
 # Copiar requirements primero (para cache de Docker)
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar el resto de la app
 COPY . .
