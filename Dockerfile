@@ -3,7 +3,7 @@ FROM python:3.11-slim-bookworm
 # Instalar dependencias del sistema
 RUN apt-get update && apt-get install -y \
     libgl1 libglib2.0-0 libxcb1 \
-    ffmpeg wget \
+    ffmpeg wget unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Crear directorio de la app
@@ -12,6 +12,14 @@ WORKDIR /app
 # Copiar requirements primero (para cache de Docker)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Pre-descargar pesos de TrackNetV3
+RUN python -c "import gdown; gdown.download('https://drive.google.com/uc?id=1CfzE87a0f6LhBp0kniSl1-89zaLCZ8cA', 'ckpts/TrackNetV3_ckpts.zip', quiet=False)" && \
+    cd ckpts && unzip TrackNetV3_ckpts.zip && rm TrackNetV3_ckpts.zip && \
+    ls -la
+
+# Pre-descargar modelo YOLO
+RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 
 # Copiar el resto de la app
 COPY . .
@@ -23,4 +31,4 @@ RUN mkdir -p uploads output
 EXPOSE 8000
 
 # Comando de inicio
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--timeout", "600", "--workers", "2"]
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--timeout", "600", "--workers", "1"]
