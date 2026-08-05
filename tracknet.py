@@ -202,8 +202,8 @@ class TrackNetTracker:
             frame_tensors.append(t)
         
         if self.bg_mode == 'concat':
-            # Concatenar todos los frames + background: (seq_len+1)*3 canales
-            input_tensor = torch.cat(frame_tensors + [bg_tensor], dim=0)
+            # Background va PRIMERO, luego los frames (como en el dataset original)
+            input_tensor = torch.cat([bg_tensor] + frame_tensors, dim=0)
         elif self.bg_mode == 'subtract':
             # Restar background de cada frame
             subtracted = [f - bg_tensor for f in frame_tensors]
