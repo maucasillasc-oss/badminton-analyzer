@@ -97,7 +97,7 @@ class ShuttlecockTracker:
         combined = cv2.bitwise_and(diff1, diff2)
         
         # Umbral alto para solo objetos muy rápidos
-        _, thresh = cv2.threshold(combined, 40, 255, cv2.THRESH_BINARY)
+        _, thresh = cv2.threshold(combined, 55, 255, cv2.THRESH_BINARY)
         
         # Erosión + dilatación para limpiar ruido
         kernel_small = np.ones((2, 2), np.uint8)
@@ -156,8 +156,8 @@ class ShuttlecockTracker:
         # Velocidad actual
         speed = np.sqrt(dx1**2 + dy1**2)
         
-        # Un golpe = cambio de dirección vertical significativo + velocidad
-        if vertical_change > min_direction_change and speed > 5:
+        # Un golpe = cambio de dirección vertical significativo + velocidad alta
+        if vertical_change > min_direction_change and speed > 12:
             return True
         
         return False
