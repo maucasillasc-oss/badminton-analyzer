@@ -16,7 +16,7 @@ class ShotDetector:
         
         # Parámetros de detección de golpes
         self.shots = []
-        self.min_frames_between_shots = 15  # ~0.5 seg a 30fps
+        self.min_frames_between_shots = 30  # ~1 segundo entre golpes mínimo
         self.last_shot_frame = -self.min_frames_between_shots
     
     def process_video(self, video_path, progress_callback=None):
@@ -55,7 +55,7 @@ class ShotDetector:
             
             # Detectar golpe por cambio de dirección del volante
             if (frame_count - self.last_shot_frame) >= self.min_frames_between_shots:
-                is_shot = self.tracker.detect_shot(min_direction_change=25)
+                is_shot = self.tracker.detect_shot(min_direction_change=45)
                 
                 if is_shot and shuttle_pos:
                     # Determinar quién golpeó
