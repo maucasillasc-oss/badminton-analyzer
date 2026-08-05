@@ -1,8 +1,8 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 # Instalar dependencias del sistema
 RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx libglib2.0-0 libxcb1 \
+    libgl1 libglib2.0-0 libxcb1 \
     ffmpeg wget \
     && rm -rf /var/lib/apt/lists/*
 
