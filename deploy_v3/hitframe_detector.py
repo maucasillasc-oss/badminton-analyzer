@@ -513,38 +513,33 @@ class HitFrameDetector:
     def _detect_hit_frames(self, direction_list):
         """
         Core algorithm from the paper:
-        A hit occurs when the predicted shuttlecock direction changes
-        between 1 (flying up/towards top player) and 2 (flying down/towards bottom player).
+        A hit occurs when the predicted shuttlecock direction changes.
+        Labels: 0=padding/no_movement, 1=flying_up, 2=flying_down
         
-        Transitions:
-            0 -> 1: hit (shuttle starts flying)
-            0 -> 2: hit
-            1 -> 2: hit (direction reversal = someone hit it back)
-            2 -> 1: hit (direction reversal = someone hit it back)
-            1 -> 0 or 2 -> 0: NOT a hit (shuttle stopped/lost)
+        Transitions that indicate a hit:
+            0 -> 1: shuttle starts flying up (hit by bottom player)
+            0 -> 2: shuttle starts flying down (hit by top player)
+            1 -> 2: direction reversal (top player hit it back down)
+            2 -> 1: direction reversal (bottom player hit it back up)
         """
         last_direction = 0
         hit_frame_indices = []
         
         for i in range(len(direction_list)):
-            direction = direction_list[i]
+            direction = int(direction_list[i])
             
-            if direction != last_direction:
+            if direction != last_direction and direction != 0:
                 if last_direction == 0:
-                    # Shuttle starts moving: hit
-                    if direction in (1, 2):
-                        hit_frame_indices.append(i)
-                elif last_direction == 1:
-                    if direction == 2:
-                        # Direction reversal: hit
-                        hit_frame_indices.append(i)
-                    # 1->0 is not a hit, just continue
-                elif last_direction == 2:
-                    if direction == 1:
-                        # Direction reversal: hit
-                        hit_frame_indices.append(i)
-                    # 2->0 is not a hit, just continue
+                    # Shuttle starts moving
+                    hit_frame_indices.append(i)
+                elif last_direction == 1 and direction == 2:
+                    # Was going up, now going down = top player hit it
+                    hit_frame_indices.append(i)
+                elif last_direction == 2 and direction == 1:
+                    # Was going down, now going up = bottom player hit it
+                    hit_frame_indices.append(i)
             
-            last_direction = direction
+            if direction != 0:
+                last_direction = direction
         
         return hit_frame_indices

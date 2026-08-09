@@ -267,7 +267,7 @@ class ClaudeAnalyzer:
             return None
         
         try:
-            prompt_text = f"""Analiza estas {len(images)} imágenes de un partido de badminton. 
+            prompt_text = f"""Analiza estas {len(images)} im├ígenes de un partido de badminton. 
 Cada imagen corresponde al momento exacto de un golpe detectado.
 Para cada imagen, clasifica el tipo de golpe como UNO de: smash, clear, drop, net, drive, serve.
 
@@ -279,8 +279,8 @@ Criterios:
 - clear: golpe alto y profundo al fondo
 - drop: golpe suave que cae cerca de la red
 - net: golpe en la red, jugador agachado
-- drive: golpe rápido horizontal a media altura
-- serve: saque (primer golpe, posición lateral)"""
+- drive: golpe r├ípido horizontal a media altura
+- serve: saque (primer golpe, posici├│n lateral)"""
 
             content = images + [{"type": "text", "text": prompt_text}]
             
@@ -317,19 +317,19 @@ Criterios:
         try:
             feedback_prompt = get_feedback_prompt()
             
-            prompt = f"""Basado en estas estadísticas de un partido de badminton, genera un análisis táctico breve (3-4 oraciones en español):
+            prompt = f"""Basado en estas estad├¡sticas de un partido de badminton, genera un an├ílisis t├íctico breve (3-4 oraciones en espa├▒ol):
 
 Total de golpes detectados: {stats['total_shots']}
 Tipos de golpes: {json.dumps(stats.get('shot_types', {}), ensure_ascii=False)}
 Rallies totales: {stats['match_stats']['total_rallies']}
 Rally promedio: {stats['match_stats']['avg_rally_length']} golpes
-Rally más largo: {stats['match_stats']['max_rally_length']} golpes
+Rally m├ís largo: {stats['match_stats']['max_rally_length']} golpes
 J1 golpes: {stats['player1']['shots']}, ataque: {stats['player1']['attack_percentage']}%
 J2 golpes: {stats['player2']['shots']}, ataque: {stats['player2']['attack_percentage']}%
 
 {feedback_prompt}
 
-Enfócate en: quién dominó, estilo de juego de cada jugador, y una recomendación táctica."""
+Enf├│cate en: qui├⌐n domin├│, estilo de juego de cada jugador, y una recomendaci├│n t├íctica."""
 
             response = self.client.invoke_model(
                 modelId=self.model_id,
@@ -375,7 +375,7 @@ Enfócate en: quién dominó, estilo de juego de cada jugador, y una recomendaci
         try:
             content = images + [{
                 "type": "text",
-                "text": "¿Estas imágenes son de un partido de badminton? Responde SOLO 'si' o 'no'."
+                "text": "┬┐Estas im├ígenes son de un partido de badminton? Responde SOLO 'si' o 'no'."
             }]
             response = self.client.invoke_model(
                 modelId=self.model_id,
@@ -388,6 +388,6 @@ Enfócate en: quién dominó, estilo de juego de cada jugador, y una recomendaci
             )
             result = json.loads(response['body'].read())
             answer = result['content'][0]['text'].strip().lower()
-            return 'si' in answer or 'sí' in answer
+            return 'si' in answer or 's├¡' in answer
         except:
             return True
