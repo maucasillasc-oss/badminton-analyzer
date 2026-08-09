@@ -1,33 +1,78 @@
-FROM python:3.11-slim-bookworm
+"""
+Download trained model weights from S3.
+Weights were trained from the paper's public dataset in Colab/SageMaker.
+"""
+import boto3
+import os
+import urllib.request
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    libgl1 libglib2.0-0 \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+WEIGHTS_DIR = 'hitframe_weights'
+S3_BUCKET = 'badminton-cdmx'
+S3_PREFIX = 'models/'
 
-# Create app directory
-WORKDIR /app
+def download_weights():
+    os.makedirs(WEIGHTS_DIR, exist_ok=True)
+    
+    s3 = boto3.client(
+        's3',
+        region_name='us-east-2',
+        aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY')
+    )
+    
+    # Download OPT Transformer weights from S3
+    files = ['OPT_16_head_dp.pt', 'scaler.pickle']
+    
+    for fname in files:
+        dst = os.path.join(WEIGHTS_DIR, fname)
+        if os.path.exists(dst):
+            print(f"  Already exists: {fname}")
+            continue
+        
+        s3_key = S3_PREFIX + fname
+        print(f"  Downloading {s3_key} from S3...")
+        try:
+            s3.download_file(S3_BUCKET, s3_key, dst)
+            size_mb = os.path.getsize(dst) / (1024 * 1024)
+            print(f"  OK: {fname} ({size_mb:.1f} MB)")
+        except Exception as e:
+            print(f"  FAILED: {fname}: {e}")
+    
+    # Download SA-CNN from GitHub (small file)
+    sacnn_dst = os.path.join(WEIGHTS_DIR, 'sacnn.pt')
+    if not os.path.exists(sacnn_dst):
+        url = ("https://github.com/arthur900530/"
+               "Automated-Hit-frame-Detection-for-Badminton-Match-Analysis/"
+               "raw/master/src/models/weights/sacnn.pt")
+        print(f"  Downloading sacnn.pt from GitHub...")
+        try:
+            urllib.request.urlretrieve(url, sacnn_dst)
+            print(f"  OK: sacnn.pt")
+        except Exception as e:
+            print(f"  FAILED: sacnn.pt: {e}")
+    
+    # Download Player KP-RCNN (torchvision pre-trained)
+    kprcnn_dst = os.path.join(WEIGHTS_DIR, 'kpRCNN.pth')
+    if not os.path.exists(kprcnn_dst):
+        print(f"  Preparing Player KP-RCNN (torchvision)...")
+        try:
+            import torch
+            from torchvision.models.detection import keypointrcnn_resnet50_fpn
+            from torchvision.models.detection import KeypointRCNN_ResNet50_FPN_Weights
+            model = keypointrcnn_resnet50_fpn(weights=KeypointRCNN_ResNet50_FPN_Weights.DEFAULT)
+            model.eval()
+            torch.save(model, kprcnn_dst)
+            size_mb = os.path.getsize(kprcnn_dst) / (1024 * 1024)
+            print(f"  OK: kpRCNN.pth ({size_mb:.1f} MB)")
+        except Exception as e:
+            print(f"  FAILED: kpRCNN.pth: {e}")
+    
+    # Verify
+    print("\nWeight files:")
+    for f in os.listdir(WEIGHTS_DIR):
+        size = os.path.getsize(os.path.join(WEIGHTS_DIR, f))
+        print(f"  {f}: {size/1024/1024:.1f} MB")
 
-# Copy requirements first (Docker cache layer)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy all application code
-COPY . .
-
-# Create necessary directories
-RUN mkdir -p uploads output hitframe_weights
-
-# Download trained model weights from S3 at build time
-# OPT Transformer (793MB) + scaler + SA-CNN
-RUN python download_weights.py
-
-# Set environment variable for weights directory
-ENV HITFRAME_WEIGHTS_DIR=/app/hitframe_weights
-
-# Expose port
-EXPOSE 8000
-
-# Start command with extended timeout for video processing
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--timeout", "900", "--workers", "1"]
+if __name__ == '__main__':
+    download_weights()
